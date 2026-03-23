@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinTrack — Login</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .login-container { width: 100%; max-width: 400px; padding: 20px; }
+        .login-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px 32px;
+            box-shadow: var(--shadow);
+        }
+        .login-logo { text-align: center; margin-bottom: 32px; }
+        .login-logo .logo-icon { font-size: 48px; }
+        .login-logo .logo-text { font-size: 28px; font-weight: 800; display: block; margin-top: 8px; }
+        .login-logo .logo-sub { color: var(--text-muted); font-size: 14px; display: block; margin-top: 4px; }
+        .login-tabs { display: flex; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+        .login-tab {
+            flex: 1; padding: 10px; text-align: center; background: none; border: none;
+            color: var(--text-muted); cursor: pointer; font-size: 14px; font-weight: 600;
+            border-bottom: 2px solid transparent; transition: var(--transition);
+        }
+        .login-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .login-form { display: none; }
+        .login-form.active { display: block; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 6px; }
+        .login-error {
+            background: var(--red-bg); color: var(--red); padding: 10px 14px;
+            border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 16px; display: none;
+        }
+        .login-error.show { display: block; }
+        .btn-primary { width: 100%; padding: 12px; font-size: 15px; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-logo">
+                <span class="logo-icon">₿</span>
+                <span class="logo-text">FinTrack</span>
+                <span class="logo-sub">Controle financeiro pessoal</span>
+            </div>
+
+            <div class="login-tabs">
+                <button class="login-tab active" data-tab="login">Entrar</button>
+                <button class="login-tab" data-tab="register">Criar Conta</button>
+            </div>
+
+            <div id="login-error" class="login-error"></div>
+
+            <!-- Login Form -->
+            <form id="form-login" class="login-form active">
+                <div class="form-group">
+                    <label for="login-user">Usuário</label>
+                    <input type="text" id="login-user" class="input" required autocomplete="username" placeholder="Seu nome de usuário">
+                </div>
+                <div class="form-group">
+                    <label for="login-pass">Senha</label>
+                    <input type="password" id="login-pass" class="input" required autocomplete="current-password" placeholder="Sua senha">
+                </div>
+                <button type="submit" class="btn-primary">Entrar</button>
+            </form>
+
+            <!-- Register Form -->
+            <form id="form-register" class="login-form">
+                <div class="form-group">
+                    <label for="reg-name">Nome</label>
+                    <input type="text" id="reg-name" class="input" required placeholder="Como quer ser chamado">
+                </div>
+                <div class="form-group">
+                    <label for="reg-user">Usuário</label>
+                    <input type="text" id="reg-user" class="input" required autocomplete="username" placeholder="Mínimo 3 caracteres">
+                </div>
+                <div class="form-group">
+                    <label for="reg-pass">Senha</label>
+                    <input type="password" id="reg-pass" class="input" required autocomplete="new-password" placeholder="Mínimo 6 caracteres">
+                </div>
+                <button type="submit" class="btn-primary">Criar Conta</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        const $ = s => document.querySelector(s);
+        const $$ = s => document.querySelectorAll(s);
+
+        // Tab switching
+        $$('.login-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                $$('.login-tab').forEach(t => t.classList.remove('active'));
+                $$('.login-form').forEach(f => f.classList.remove('active'));
+                tab.classList.add('active');
+                $(`#form-${tab.dataset.tab}`).classList.add('active');
+                hideError();
+            });
+        });
+
+        function showError(msg) {
+            const el = $('#login-error');
+            el.textContent = msg;
+            el.classList.add('show');
+        }
+        function hideError() { $('#login-error').classList.remove('show'); }
+
+        async function post(url, data) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error || 'Erro desconhecido');
+            return json;
+        }
+
+        // Login
+        $('#form-login').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+            try {
+                await post('/api/auth/login', {
+                    username: $('#login-user').value.trim(),
+                    password: $('#login-pass').value,
+                });
+                window.location.href = '/';
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+
+        // Register
+        $('#form-register').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+            try {
+                await post('/api/auth/register', {
+                    username: $('#reg-user').value.trim(),
+                    password: $('#reg-pass').value,
+                    display_name: $('#reg-name').value.trim(),
+                });
+                window.location.href = '/';
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+
+        // If already logged in, redirect
+        fetch('/api/auth/me').then(r => {
+            if (r.ok) window.location.href = '/';
+        }).catch(() => {});
+    })();
+    </script>
+</body>
+</html>

@@ -757,8 +757,24 @@
         if (active) switchView(active.dataset.view);
     }
 
+    // ===== Logout =====
+    $('#btn-logout').addEventListener('click', async () => {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        window.location.href = '/login';
+    });
+
     // ===== Init =====
     async function init() {
+        // Check auth
+        try {
+            const user = await api.get('/api/auth/me');
+            const nameEl = $('#user-name');
+            if (nameEl) nameEl.textContent = user.display_name || user.username;
+        } catch (err) {
+            window.location.href = '/login';
+            return;
+        }
+
         const now = new Date();
         $('#header-date').textContent = now.toLocaleDateString('pt-BR', {
             weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
