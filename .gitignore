@@ -1,0 +1,6 @@
+settings.local.json
+.env
+*.pyc
+__pycache__/
+node_modules/
+.DS_Store
