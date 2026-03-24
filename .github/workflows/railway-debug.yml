@@ -1,0 +1,59 @@
+name: Railway Debug
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Railway status
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          gql() {
+            curl -s -X POST "$API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"$1\"}"
+          }
+
+          echo "=== Projects ==="
+          PROJECTS=$(gql "{ projects { edges { node { id name } } } }")
+          echo "$PROJECTS" | jq .
+
+          PROJECT_ID="b3a5da12-4cb8-4ce1-a9c8-c0008be7b56d"
+          SERVICE_ID="643c02ed-c86e-4a0d-abda-1cab26c9db7a"
+
+          echo "=== Service Details ==="
+          DETAILS=$(gql "{ service(id: \\\"$SERVICE_ID\\\") { id name repoTriggers { edges { node { repository branch } } } } }")
+          echo "$DETAILS" | jq .
+
+          echo "=== Deployments ==="
+          DEPLOYS=$(gql "{ deployments(first: 5, input: { projectId: \\\"$PROJECT_ID\\\" }) { edges { node { id status createdAt } } } }")
+          echo "$DEPLOYS" | jq .
+
+          echo "=== Environment Variables ==="
+          ENV_ID_QUERY=$(gql "{ project(id: \\\"$PROJECT_ID\\\") { environments { edges { node { id name } } } } }")
+          echo "$ENV_ID_QUERY" | jq .
+
+          # Compile report
+          REPORT="## Railway Debug Report\n\n"
+          REPORT="$REPORT### Projects\n\`\`\`json\n$PROJECTS\n\`\`\`\n\n"
+          REPORT="$REPORT### Service\n\`\`\`json\n$DETAILS\n\`\`\`\n\n"
+          REPORT="$REPORT### Deployments\n\`\`\`json\n$DEPLOYS\n\`\`\`\n\n"
+          REPORT="$REPORT### Environments\n\`\`\`json\n$ENV_ID_QUERY\n\`\`\`"
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          REPORT=$(cat /tmp/report.txt 2>/dev/null || echo "No report")
+          gh issue create \
+            --title "Railway Debug - $(date -u +%H:%M)" \
+            --body "$REPORT" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
