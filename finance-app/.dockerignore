@@ -1,0 +1,5 @@
+node_modules
+fintrack.db
+fintrack.db-shm
+fintrack.db-wal
+.git
