@@ -1,0 +1,78 @@
+name: Railway Fix Deploy
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+  contents: read
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fix and redeploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set +e
+          API="https://backboard.railway.app/graphql/v2"
+          PROJECT_ID="b3a5da12-4cb8-4ce1-a9c8-c0008be7b56d"
+          SERVICE_ID="643c02ed-c86e-4a0d-abda-1cab26c9db7a"
+          ENV_ID="c3c66d13-1b88-410e-adf8-ad1a05fd41b2"
+          REPORT=""
+
+          gql() {
+            curl -s -X POST "$API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          # Step 1: Connect GitHub repo to service
+          echo "Connecting repo..."
+          CONNECT=$(gql '{"query":"mutation { serviceConnect(id: \"'$SERVICE_ID'\", input: { repo: \"tatucvieira/claude-base\", branch: \"main\" }) { id name } }"}')
+          echo "Connect result: $CONNECT"
+          REPORT="## Fix Report\n\n### Connect Repo\n\`\`\`json\n$CONNECT\n\`\`\`\n\n"
+
+          # Step 2: Set root directory and PORT
+          echo "Setting variables..."
+          gql '{"query":"mutation { variableUpsert(input: { projectId: \"'$PROJECT_ID'\", environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\", name: \"RAILWAY_ROOT_DIRECTORY\", value: \"finance-app\" }) }"}'
+          gql '{"query":"mutation { variableUpsert(input: { projectId: \"'$PROJECT_ID'\", environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\", name: \"PORT\", value: \"3000\" }) }"}'
+          gql '{"query":"mutation { variableUpsert(input: { projectId: \"'$PROJECT_ID'\", environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\", name: \"NODE_ENV\", value: \"production\" }) }"}'
+          REPORT="$REPORT### Variables\nPORT=3000, RAILWAY_ROOT_DIRECTORY=finance-app, NODE_ENV=production\n\n"
+
+          # Step 3: Trigger redeploy
+          echo "Triggering redeploy..."
+          REDEPLOY=$(gql '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\") }"}')
+          echo "Redeploy: $REDEPLOY"
+          REPORT="$REPORT### Redeploy\n\`\`\`json\n$REDEPLOY\n\`\`\`\n\n"
+
+          # Step 4: Wait and check deployment status
+          sleep 15
+          DEPLOYS=$(gql '{"query":"{ deployments(first: 3, input: { projectId: \"'$PROJECT_ID'\" }) { edges { node { id status createdAt } } } }"}')
+          echo "Deployments: $DEPLOYS"
+          REPORT="$REPORT### Latest Deployments\n\`\`\`json\n$DEPLOYS\n\`\`\`\n\n"
+
+          # Step 5: Get deploy logs for the latest failed deploy
+          LATEST_DEPLOY=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.id')
+          if [ -n "$LATEST_DEPLOY" ]; then
+            LOGS=$(gql '{"query":"{ deploymentLogs(deploymentId: \"'$LATEST_DEPLOY'\", limit: 50) { message timestamp } }"}')
+            REPORT="$REPORT### Build Logs (latest)\n\`\`\`\n$LOGS\n\`\`\`\n"
+          fi
+
+          # Step 6: Check service details
+          SVC=$(gql '{"query":"{ service(id: \"'$SERVICE_ID'\") { id name repoTriggers { edges { node { repository branch } } } serviceInstances { edges { node { domains { serviceDomains { domain } } } } } } }"}')
+          REPORT="$REPORT### Service Details\n\`\`\`json\n$SVC\n\`\`\`"
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          REPORT=$(cat /tmp/report.txt 2>/dev/null || echo "No report")
+          gh issue create \
+            --title "Railway Fix: $(date -u +%H:%M)" \
+            --body "$REPORT" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
