@@ -1,0 +1,41 @@
+name: Deploy to Railway
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Railway project name'
+        required: true
+        default: 'fintrack'
+      subdirectory:
+        description: 'Subdirectory to deploy'
+        required: true
+        default: 'finance-app'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: bash <(curl -fsSL cli.new)
+
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          cd "${{ inputs.subdirectory }}"
+
+          # Try to link to existing project, or create new one
+          railway link --project "${{ inputs.project_name }}" 2>/dev/null || \
+            railway init --name "${{ inputs.project_name }}"
+
+          echo "🚀 Deploying ${{ inputs.subdirectory }} as '${{ inputs.project_name }}'..."
+          railway up --detach
+
+          # Try to generate a public domain
+          railway domain 2>/dev/null && echo "✅ Domain assigned!" || echo "ℹ️ Domain may already exist"
+
+          echo ""
+          echo "✅ Deploy triggered! Check https://railway.app/dashboard for status."
