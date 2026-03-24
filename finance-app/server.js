@@ -58,10 +58,35 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS budgets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount REAL NOT NULL CHECK(amount > 0),
+    UNIQUE(user_id, category_id, month)
+  );
+
+  CREATE TABLE IF NOT EXISTS recurring_transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK(type IN ('income', 'expense')),
+    description TEXT NOT NULL,
+    amount REAL NOT NULL CHECK(amount > 0),
+    category_id TEXT NOT NULL REFERENCES categories(id),
+    day_of_month INTEGER NOT NULL CHECK(day_of_month >= 1 AND day_of_month <= 28),
+    notes TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    last_generated TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
   CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
   CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+  CREATE INDEX IF NOT EXISTS idx_budgets_user_month ON budgets(user_id, month);
+  CREATE INDEX IF NOT EXISTS idx_recurring_user ON recurring_transactions(user_id);
 `);
 
 // Clean expired sessions on startup
@@ -354,6 +379,113 @@ app.get('/api/stats/monthly', requireAuth, (req, res) => {
   }
 
   res.json(result);
+});
+
+// --- Budgets ---
+app.get('/api/budgets', requireAuth, (req, res) => {
+  const { month } = req.query;
+  if (!month) return res.status(400).json({ error: 'Parâmetro month obrigatório' });
+  const rows = db.prepare('SELECT * FROM budgets WHERE user_id = ? AND month = ?').all(req.user.id, month);
+  res.json(rows);
+});
+
+app.put('/api/budgets', requireAuth, (req, res) => {
+  const { category_id, month, amount } = req.body;
+  if (!category_id || !month || !amount) return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+
+  const existing = db.prepare('SELECT id FROM budgets WHERE user_id = ? AND category_id = ? AND month = ?')
+    .get(req.user.id, category_id, month);
+
+  if (existing) {
+    db.prepare('UPDATE budgets SET amount = ? WHERE id = ?').run(amount, existing.id);
+    res.json({ id: existing.id, category_id, month, amount });
+  } else {
+    const id = genId();
+    db.prepare('INSERT INTO budgets (id, user_id, category_id, month, amount) VALUES (?, ?, ?, ?, ?)')
+      .run(id, req.user.id, category_id, month, amount);
+    res.status(201).json({ id, category_id, month, amount });
+  }
+});
+
+app.delete('/api/budgets/:id', requireAuth, (req, res) => {
+  const result = db.prepare('DELETE FROM budgets WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Orçamento não encontrado' });
+  res.json({ success: true });
+});
+
+app.get('/api/budgets/status', requireAuth, (req, res) => {
+  const { month } = req.query;
+  if (!month) return res.status(400).json({ error: 'Parâmetro month obrigatório' });
+  const uid = req.user.id;
+
+  const budgets = db.prepare('SELECT * FROM budgets WHERE user_id = ? AND month = ?').all(uid, month);
+  const spent = db.prepare(
+    "SELECT category_id, SUM(amount) as total FROM transactions WHERE user_id = ? AND type = 'expense' AND substr(date, 1, 7) = ? GROUP BY category_id"
+  ).all(uid, month);
+
+  const spentMap = {};
+  spent.forEach(s => { spentMap[s.category_id] = s.total; });
+
+  const result = budgets.map(b => ({
+    ...b,
+    spent: spentMap[b.category_id] || 0,
+    remaining: b.amount - (spentMap[b.category_id] || 0),
+    percentage: Math.min(100, Math.round(((spentMap[b.category_id] || 0) / b.amount) * 100)),
+  }));
+
+  res.json(result);
+});
+
+// --- Recurring Transactions ---
+app.get('/api/recurring', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM recurring_transactions WHERE user_id = ? ORDER BY day_of_month').all(req.user.id);
+  res.json(rows);
+});
+
+app.post('/api/recurring', requireAuth, (req, res) => {
+  const { type, description, amount, category_id, day_of_month, notes } = req.body;
+  if (!type || !description || !amount || !category_id || !day_of_month) {
+    return res.status(400).json({ error: 'Campos obrigatórios faltando' });
+  }
+  const id = genId();
+  db.prepare('INSERT INTO recurring_transactions (id, user_id, type, description, amount, category_id, day_of_month, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.user.id, type, description, amount, category_id, day_of_month, notes || '');
+  res.status(201).json({ id, type, description, amount, category_id, day_of_month, notes });
+});
+
+app.delete('/api/recurring/:id', requireAuth, (req, res) => {
+  const result = db.prepare('DELETE FROM recurring_transactions WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Recorrência não encontrada' });
+  res.json({ success: true });
+});
+
+app.post('/api/recurring/generate', requireAuth, (req, res) => {
+  const { month } = req.body;
+  if (!month) return res.status(400).json({ error: 'Parâmetro month obrigatório' });
+  const uid = req.user.id;
+
+  const recurring = db.prepare('SELECT * FROM recurring_transactions WHERE user_id = ? AND active = 1').all(uid);
+  let generated = 0;
+
+  const insertTx = db.prepare('INSERT INTO transactions (id, user_id, type, description, amount, category_id, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  const updateLastGen = db.prepare('UPDATE recurring_transactions SET last_generated = ? WHERE id = ?');
+
+  const tx = db.transaction(() => {
+    for (const r of recurring) {
+      if (r.last_generated === month) continue;
+      const date = `${month}-${String(r.day_of_month).padStart(2, '0')}`;
+      const existing = db.prepare('SELECT id FROM transactions WHERE user_id = ? AND description = ? AND date = ? AND amount = ?')
+        .get(uid, r.description, date, r.amount);
+      if (existing) continue;
+
+      insertTx.run(genId(), uid, r.type, r.description, r.amount, r.category_id, date, r.notes || '');
+      updateLastGen.run(month, r.id);
+      generated++;
+    }
+  });
+  tx();
+
+  res.json({ generated });
 });
 
 // Start server
