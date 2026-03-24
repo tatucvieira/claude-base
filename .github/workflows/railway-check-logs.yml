@@ -1,0 +1,63 @@
+name: Railway Check Logs
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get deploy status and logs
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PROJECT_ID="b3a5da12-4cb8-4ce1-a9c8-c0008be7b56d"
+
+          gql() {
+            curl -s -X POST "$API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          REPORT="## Deploy Status Check\n\n"
+
+          # Get latest deployments
+          DEPLOYS=$(gql '{"query":"{ deployments(first: 5, input: { projectId: \"'$PROJECT_ID'\" }) { edges { node { id status createdAt } } } }"}')
+          REPORT="$REPORT### Deployments\n\`\`\`json\n$(echo $DEPLOYS | jq .)\n\`\`\`\n\n"
+
+          # Get logs for each recent deploy
+          for DEPLOY_ID in $(echo "$DEPLOYS" | jq -r '.data.deployments.edges[].node.id' | head -3); do
+            STATUS=$(echo "$DEPLOYS" | jq -r ".data.deployments.edges[] | select(.node.id == \"$DEPLOY_ID\") | .node.status")
+            LOGS=$(gql '{"query":"{ deploymentLogs(deploymentId: \"'$DEPLOY_ID'\", limit: 100) { message timestamp } }"}')
+            LOG_COUNT=$(echo "$LOGS" | jq '.data.deploymentLogs | length' 2>/dev/null || echo 0)
+            
+            REPORT="$REPORT### Deploy $DEPLOY_ID ($STATUS) - $LOG_COUNT logs\n"
+            if [ "$LOG_COUNT" -gt 0 ]; then
+              MESSAGES=$(echo "$LOGS" | jq -r '.data.deploymentLogs[].message' 2>/dev/null | head -50)
+              REPORT="$REPORT\`\`\`\n$MESSAGES\n\`\`\`\n\n"
+            else
+              REPORT="$REPORT(no logs available)\n\n"
+
+              # Try build logs
+              BUILD=$(gql '{"query":"{ buildLogs(deploymentId: \"'$DEPLOY_ID'\", limit: 100) { message } }"}')
+              BUILD_COUNT=$(echo "$BUILD" | jq '.data.buildLogs | length' 2>/dev/null || echo 0)
+              if [ "$BUILD_COUNT" -gt 0 ]; then
+                BUILD_MSG=$(echo "$BUILD" | jq -r '.data.buildLogs[].message' 2>/dev/null | head -50)
+                REPORT="$REPORT#### Build Logs\n\`\`\`\n$BUILD_MSG\n\`\`\`\n\n"
+              fi
+            fi
+          done
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          gh issue create \
+            --title "Deploy Logs: $(date -u +%H:%M)" \
+            --body "$(cat /tmp/report.txt)" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
