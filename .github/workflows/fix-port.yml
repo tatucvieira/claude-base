@@ -1,0 +1,60 @@
+name: Fix Port
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix PORT and check
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PROJECT_ID="b3a5da12-4cb8-4ce1-a9c8-c0008be7b56d"
+          SERVICE_ID="643c02ed-c86e-4a0d-abda-1cab26c9db7a"
+          ENV_ID="c3c66d13-1b88-410e-adf8-ad1a05fd41b2"
+
+          gql() {
+            curl -s -X POST "$API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          # Get current variables
+          VARS=$(gql '{"query":"{ variables(projectId: \"'$PROJECT_ID'\", environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\") }"}')
+          echo "Current vars: $VARS"
+
+          # Delete the PORT=8080 and set correct value
+          # Railway injects PORT automatically, let's remove our override
+          DELETE_PORT=$(gql '{"query":"mutation { variableDelete(input: { projectId: \"'$PROJECT_ID'\", environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\", name: \"PORT\" }) }"}')
+          echo "Delete PORT: $DELETE_PORT"
+
+          # Redeploy
+          REDEPLOY=$(gql '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\") }"}')
+          echo "Redeploy: $REDEPLOY"
+
+          sleep 90
+
+          # Check
+          DEPLOYS=$(gql '{"query":"{ deployments(first: 2, input: { projectId: \"'$PROJECT_ID'\" }) { edges { node { id status createdAt } } } }"}')
+          
+          LATEST_ID=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.id')
+          LATEST_STATUS=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.status')
+          
+          LOGS=$(gql '{"query":"{ deploymentLogs(deploymentId: \"'$LATEST_ID'\", limit: 20) { message } }"}')
+          LOG_MSG=$(echo "$LOGS" | jq -r '.data.deploymentLogs[].message' 2>/dev/null)
+
+          REPORT="## Port Fix\n\n"
+          REPORT="$REPORT### Variables\n\`\`\`json\n$(echo $VARS | jq .)\n\`\`\`\n\n"
+          REPORT="$REPORT### Status: $LATEST_STATUS\n\n"
+          REPORT="$REPORT### Runtime Logs\n\`\`\`\n$LOG_MSG\n\`\`\`"
+
+          gh issue create \
+            --title "Port Fix: $(date -u +%H:%M)" \
+            --body "$(echo -e "$REPORT")" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
