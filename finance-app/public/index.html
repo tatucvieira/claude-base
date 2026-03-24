@@ -24,6 +24,12 @@
                 <button class="nav-btn" data-view="categories">
                     <span class="nav-icon">🏷️</span> Categorias
                 </button>
+                <button class="nav-btn" data-view="budget">
+                    <span class="nav-icon">🎯</span> Orçamento
+                </button>
+                <button class="nav-btn" data-view="recurring">
+                    <span class="nav-icon">🔄</span> Recorrentes
+                </button>
                 <button class="nav-btn" data-view="reports">
                     <span class="nav-icon">📈</span> Relatórios
                 </button>
@@ -41,6 +47,11 @@
             <header class="header">
                 <div class="header-left">
                     <h1 id="page-title">Dashboard</h1>
+                    <div class="month-nav" id="month-nav">
+                        <button class="btn-icon" id="btn-prev-month" title="Mês anterior">◀</button>
+                        <span class="month-label" id="month-label"></span>
+                        <button class="btn-icon" id="btn-next-month" title="Próximo mês">▶</button>
+                    </div>
                     <span class="header-date" id="header-date"></span>
                 </div>
                 <div class="header-right">
@@ -154,6 +165,105 @@
                 </div>
             </section>
         </main>
+    </div>
+
+            <!-- Budget View -->
+            <section id="view-budget" class="view">
+                <div class="filters-bar">
+                    <input type="month" id="budget-month" class="input" style="max-width:200px">
+                    <button class="btn-primary" id="btn-add-budget">+ Definir Orçamento</button>
+                </div>
+                <div class="budget-summary" id="budget-summary"></div>
+                <div class="panel">
+                    <h3>Orçamentos por Categoria</h3>
+                    <div id="budget-list" class="budget-list"></div>
+                    <div id="no-budgets" class="empty-state" style="display:none;">
+                        <p>Nenhum orçamento definido para este mês.</p>
+                        <p style="margin-top:8px;font-size:13px;">Defina limites por categoria para controlar seus gastos.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Recurring View -->
+            <section id="view-recurring" class="view">
+                <div class="filters-bar">
+                    <button class="btn-primary" id="btn-add-recurring">+ Nova Recorrência</button>
+                    <button class="btn-secondary" id="btn-generate-recurring" style="width:auto;">Gerar Transações do Mês</button>
+                </div>
+                <div class="panel">
+                    <div id="recurring-list" class="transaction-list"></div>
+                    <div id="no-recurring" class="empty-state" style="display:none;">
+                        <p>Nenhuma transação recorrente configurada.</p>
+                        <p style="margin-top:8px;font-size:13px;">Adicione gastos fixos como aluguel, streaming, etc.</p>
+                    </div>
+                </div>
+            </section>
+
+    <!-- Modal: Definir Orçamento -->
+    <div class="modal-overlay" id="modal-budget">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Definir Orçamento</h2>
+                <button class="modal-close" data-close="modal-budget">&times;</button>
+            </div>
+            <form id="form-budget">
+                <div class="form-group">
+                    <label for="budget-category">Categoria</label>
+                    <select id="budget-category" class="input" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="budget-amount">Limite Mensal (R$)</label>
+                    <input type="number" id="budget-amount" class="input" required min="1" step="0.01" placeholder="0,00">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" data-close="modal-budget">Cancelar</button>
+                    <button type="submit" class="btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Nova Recorrência -->
+    <div class="modal-overlay" id="modal-recurring">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Nova Transação Recorrente</h2>
+                <button class="modal-close" data-close="modal-recurring">&times;</button>
+            </div>
+            <form id="form-recurring">
+                <div class="form-group">
+                    <label>Tipo</label>
+                    <div class="toggle-group">
+                        <button type="button" class="toggle-btn active" data-rectype="expense">Despesa</button>
+                        <button type="button" class="toggle-btn" data-rectype="income">Receita</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="rec-description">Descrição</label>
+                    <input type="text" id="rec-description" class="input" required placeholder="Ex: Aluguel">
+                </div>
+                <div class="form-group">
+                    <label for="rec-amount">Valor (R$)</label>
+                    <input type="number" id="rec-amount" class="input" required min="0.01" step="0.01" placeholder="0,00">
+                </div>
+                <div class="form-group">
+                    <label for="rec-category">Categoria</label>
+                    <select id="rec-category" class="input" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="rec-day">Dia do Mês (1-28)</label>
+                    <input type="number" id="rec-day" class="input" required min="1" max="28" placeholder="5">
+                </div>
+                <div class="form-group">
+                    <label for="rec-notes">Observações</label>
+                    <input type="text" id="rec-notes" class="input" placeholder="Opcional">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" data-close="modal-recurring">Cancelar</button>
+                    <button type="submit" class="btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Modal: Nova Transação -->
