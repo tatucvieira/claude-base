@@ -1,0 +1,277 @@
+name: Test App E2E
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run E2E tests
+        run: |
+          BASE="https://web-production-0864d.up.railway.app"
+          REPORT="## E2E Test Report\n\n"
+          PASS=0
+          FAIL=0
+          COOKIE_JAR="/tmp/cookies.txt"
+
+          check() {
+            local name="$1" expected="$2" actual="$3"
+            if echo "$actual" | grep -q "$expected"; then
+              REPORT="$REPORT✅ **$name** — OK\n"
+              PASS=$((PASS+1))
+            else
+              REPORT="$REPORT❌ **$name** — FAIL (expected: $expected, got: $actual)\n"
+              FAIL=$((FAIL+1))
+            fi
+          }
+
+          # 1. Healthcheck
+          HC=$(curl -s -o /tmp/hc.txt -w "%{http_code}" "$BASE/healthz")
+          HC_BODY=$(cat /tmp/hc.txt)
+          check "Healthcheck returns 200" "200" "$HC"
+          check "Healthcheck body has ok" "ok" "$HC_BODY"
+          REPORT="$REPORT   Response: \`$HC_BODY\`\n\n"
+
+          # 2. Login page
+          LP=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/login")
+          check "Login page loads (200)" "200" "$LP"
+
+          # 3. Root redirects to login
+          ROOT=$(curl -s -o /dev/null -w "%{http_code}" --max-redirs 0 "$BASE/")
+          check "Root redirects (302)" "302" "$ROOT"
+
+          # 4. Register a test user
+          REPORT="$REPORT\n### Registration\n"
+          REG=$(curl -s -X POST "$BASE/api/auth/register" \
+            -H "Content-Type: application/json" \
+            -c "$COOKIE_JAR" \
+            -d '{"username":"testuser_e2e","password":"test123456","display_name":"Test User"}')
+          check "Registration succeeds" "success" "$REG"
+          REPORT="$REPORT   Response: \`$(echo $REG | head -c 200)\`\n"
+          USER_ID=$(echo "$REG" | jq -r '.user.id // empty')
+          REPORT="$REPORT   User ID: \`$USER_ID\`\n\n"
+
+          # 5. Auth check
+          REPORT="$REPORT### Auth Check\n"
+          ME=$(curl -s -b "$COOKIE_JAR" "$BASE/api/auth/me")
+          check "Auth me returns user" "testuser_e2e" "$ME"
+          REPORT="$REPORT   Response: \`$ME\`\n\n"
+
+          # 6. Categories loaded (seeded)
+          REPORT="$REPORT### Categories\n"
+          CATS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/categories")
+          CAT_COUNT=$(echo "$CATS" | jq 'length')
+          check "Default categories seeded" "11" "$CAT_COUNT"
+          FIRST_CAT=$(echo "$CATS" | jq -r '.[0].id')
+          EXPENSE_CAT=$(echo "$CATS" | jq -r '[.[] | select(.type=="expense")][0].id')
+          INCOME_CAT=$(echo "$CATS" | jq -r '[.[] | select(.type=="income")][0].id')
+          REPORT="$REPORT   Count: $CAT_COUNT, Expense cat: \`$EXPENSE_CAT\`, Income cat: \`$INCOME_CAT\`\n\n"
+
+          # 7. Add transactions
+          REPORT="$REPORT### Transactions\n"
+          TX1=$(curl -s -X POST "$BASE/api/transactions" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"id\":\"tx-test-1\",\"type\":\"expense\",\"description\":\"Supermercado\",\"amount\":250.50,\"category_id\":\"$EXPENSE_CAT\",\"date\":\"2026-03-15\",\"notes\":\"Compras semanais\"}")
+          check "Add expense transaction" "tx-test-1" "$TX1"
+
+          TX2=$(curl -s -X POST "$BASE/api/transactions" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"id\":\"tx-test-2\",\"type\":\"income\",\"description\":\"Salário\",\"amount\":8500.00,\"category_id\":\"$INCOME_CAT\",\"date\":\"2026-03-05\",\"notes\":\"\"}")
+          check "Add income transaction" "tx-test-2" "$TX2"
+
+          TX3=$(curl -s -X POST "$BASE/api/transactions" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"id\":\"tx-test-3\",\"type\":\"expense\",\"description\":\"Aluguel\",\"amount\":2000.00,\"category_id\":\"$EXPENSE_CAT\",\"date\":\"2026-03-05\",\"notes\":\"\"}")
+          check "Add second expense" "tx-test-3" "$TX3"
+
+          # 8. List transactions
+          TXS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/transactions")
+          TX_COUNT=$(echo "$TXS" | jq 'length')
+          check "List shows 3 transactions" "3" "$TX_COUNT"
+          REPORT="$REPORT   Transaction count: $TX_COUNT\n"
+
+          # 9. Filter transactions
+          FILTERED=$(curl -s -b "$COOKIE_JAR" "$BASE/api/transactions?type=expense")
+          FILT_COUNT=$(echo "$FILTERED" | jq 'length')
+          check "Filter expenses shows 2" "2" "$FILT_COUNT"
+
+          SEARCH=$(curl -s -b "$COOKIE_JAR" "$BASE/api/transactions?search=Supermercado")
+          SRCH_COUNT=$(echo "$SEARCH" | jq 'length')
+          check "Search finds Supermercado" "1" "$SRCH_COUNT"
+
+          # 10. Edit transaction
+          EDIT=$(curl -s -X PUT "$BASE/api/transactions/tx-test-1" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"type\":\"expense\",\"description\":\"Supermercado Extra\",\"amount\":275.00,\"category_id\":\"$EXPENSE_CAT\",\"date\":\"2026-03-15\",\"notes\":\"Atualizado\"}")
+          check "Edit transaction" "Supermercado Extra" "$EDIT"
+
+          # 11. Stats
+          REPORT="$REPORT\n### Dashboard Stats\n"
+          STATS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/stats/summary?month=2026-03")
+          check "Stats has balance" "balance" "$STATS"
+          BALANCE=$(echo "$STATS" | jq '.balance')
+          M_INCOME=$(echo "$STATS" | jq '.monthIncome')
+          M_EXPENSE=$(echo "$STATS" | jq '.monthExpenses')
+          REPORT="$REPORT   Balance: $BALANCE, Income: $M_INCOME, Expenses: $M_EXPENSE\n"
+          check "Balance = 8500 - 275 - 2000 = 6225" "6225" "$BALANCE"
+
+          # 12. Stats by category
+          BY_CAT=$(curl -s -b "$COOKIE_JAR" "$BASE/api/stats/by-category?month=2026-03&type=expense")
+          check "Category stats returned" "total" "$BY_CAT"
+
+          # 13. Monthly stats
+          MONTHLY=$(curl -s -b "$COOKIE_JAR" "$BASE/api/stats/monthly?months_back=3")
+          MONTH_LEN=$(echo "$MONTHLY" | jq 'length')
+          check "Monthly stats returns 3 months" "3" "$MONTH_LEN"
+
+          # 14. Budget
+          REPORT="$REPORT\n### Budget\n"
+          BUD=$(curl -s -X PUT "$BASE/api/budgets" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"category_id\":\"$EXPENSE_CAT\",\"month\":\"2026-03\",\"amount\":3000}")
+          check "Create budget" "category_id" "$BUD"
+          REPORT="$REPORT   Created: \`$(echo $BUD | head -c 150)\`\n"
+
+          BUD_STATUS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/budgets/status?month=2026-03")
+          check "Budget status has percentage" "percentage" "$BUD_STATUS"
+          BUD_SPENT=$(echo "$BUD_STATUS" | jq '.[0].spent')
+          BUD_PCT=$(echo "$BUD_STATUS" | jq '.[0].percentage')
+          REPORT="$REPORT   Spent: $BUD_SPENT, Percentage: $BUD_PCT%\n"
+
+          # Update budget
+          BUD2=$(curl -s -X PUT "$BASE/api/budgets" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"category_id\":\"$EXPENSE_CAT\",\"month\":\"2026-03\",\"amount\":2500}")
+          check "Update budget (upsert)" "2500" "$BUD2"
+
+          # 15. Recurring transactions
+          REPORT="$REPORT\n### Recurring Transactions\n"
+          REC=$(curl -s -X POST "$BASE/api/recurring" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"type\":\"expense\",\"description\":\"Netflix\",\"amount\":55.90,\"category_id\":\"$EXPENSE_CAT\",\"day_of_month\":15,\"notes\":\"Streaming\"}")
+          check "Create recurring" "Netflix" "$REC"
+          REC_ID=$(echo "$REC" | jq -r '.id // empty')
+
+          REC2=$(curl -s -X POST "$BASE/api/recurring" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d "{\"type\":\"expense\",\"description\":\"Gym\",\"amount\":129.90,\"category_id\":\"$EXPENSE_CAT\",\"day_of_month\":5,\"notes\":\"Academia\"}")
+          check "Create second recurring" "Gym" "$REC2"
+
+          RECS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/recurring")
+          REC_COUNT=$(echo "$RECS" | jq 'length')
+          check "List recurring shows 2" "2" "$REC_COUNT"
+
+          # Generate recurring for this month
+          GEN=$(curl -s -X POST "$BASE/api/recurring/generate" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d '{"month":"2026-03"}')
+          GEN_COUNT=$(echo "$GEN" | jq '.generated')
+          check "Generate recurring transactions" "2" "$GEN_COUNT"
+          REPORT="$REPORT   Generated: $GEN_COUNT transactions\n"
+
+          # Verify they were created
+          TXS_AFTER=$(curl -s -b "$COOKIE_JAR" "$BASE/api/transactions")
+          TX_AFTER_COUNT=$(echo "$TXS_AFTER" | jq 'length')
+          check "Total transactions now 5 (3 manual + 2 generated)" "5" "$TX_AFTER_COUNT"
+
+          # Generate again should be 0 (already done)
+          GEN2=$(curl -s -X POST "$BASE/api/recurring/generate" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d '{"month":"2026-03"}')
+          GEN2_COUNT=$(echo "$GEN2" | jq '.generated')
+          check "Re-generate returns 0 (idempotent)" "0" "$GEN2_COUNT"
+
+          # 16. Delete recurring
+          DEL_REC=$(curl -s -X DELETE "$BASE/api/recurring/$REC_ID" -b "$COOKIE_JAR")
+          check "Delete recurring" "success" "$DEL_REC"
+
+          # 17. Delete transaction
+          DEL_TX=$(curl -s -X DELETE "$BASE/api/transactions/tx-test-1" -b "$COOKIE_JAR")
+          check "Delete transaction" "success" "$DEL_TX"
+
+          # 18. Export check (all transactions)
+          FINAL_TXS=$(curl -s -b "$COOKIE_JAR" "$BASE/api/transactions")
+          FINAL_COUNT=$(echo "$FINAL_TXS" | jq 'length')
+          REPORT="$REPORT\n### Final State\n"
+          REPORT="$REPORT   Remaining transactions: $FINAL_COUNT\n"
+
+          # 19. Create custom category
+          REPORT="$REPORT\n### Custom Category\n"
+          NEW_CAT=$(curl -s -X POST "$BASE/api/categories" \
+            -H "Content-Type: application/json" \
+            -b "$COOKIE_JAR" \
+            -d '{"id":"cat-custom-1","name":"Viagem","icon":"✈️","color":"#f97316","type":"expense"}')
+          check "Create custom category" "Viagem" "$NEW_CAT"
+
+          # Delete unused category
+          DEL_CAT=$(curl -s -X DELETE "$BASE/api/categories/cat-custom-1" -b "$COOKIE_JAR")
+          check "Delete unused category" "success" "$DEL_CAT"
+
+          # 20. Logout
+          REPORT="$REPORT\n### Logout\n"
+          LOGOUT=$(curl -s -X POST "$BASE/api/auth/logout" -b "$COOKIE_JAR" -c "$COOKIE_JAR")
+          check "Logout succeeds" "success" "$LOGOUT"
+
+          # After logout, me should fail
+          ME2=$(curl -s -b "$COOKIE_JAR" "$BASE/api/auth/me" -o /dev/null -w "%{http_code}")
+          check "After logout, auth returns 401" "401" "$ME2"
+
+          # 21. Login with created user
+          REPORT="$REPORT\n### Re-login\n"
+          LOGIN=$(curl -s -X POST "$BASE/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -c "$COOKIE_JAR" \
+            -d '{"username":"testuser_e2e","password":"test123456"}')
+          check "Login succeeds" "success" "$LOGIN"
+
+          # 22. Duplicate register should fail
+          DUP=$(curl -s -X POST "$BASE/api/auth/register" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"testuser_e2e","password":"other123","display_name":"Dup"}' \
+            -o /tmp/dup.txt -w "%{http_code}")
+          check "Duplicate register returns 409" "409" "$DUP"
+
+          # 23. Wrong password
+          WRONG=$(curl -s -X POST "$BASE/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -o /tmp/wrong.txt -w "%{http_code}" \
+            -d '{"username":"testuser_e2e","password":"wrongpassword"}')
+          check "Wrong password returns 401" "401" "$WRONG"
+
+          # 24. Static files
+          CSS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/style.css")
+          check "CSS loads" "200" "$CSS"
+          JS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/app.js")
+          check "JS loads" "200" "$JS"
+
+          # Summary
+          TOTAL=$((PASS+FAIL))
+          REPORT="$REPORT\n---\n## Summary: $PASS/$TOTAL passed"
+          if [ $FAIL -gt 0 ]; then
+            REPORT="$REPORT, **$FAIL FAILED**"
+          else
+            REPORT="$REPORT ✅ All tests passed!"
+          fi
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          gh issue create \
+            --title "E2E Test Results: $(date -u +'%Y-%m-%d %H:%M')" \
+            --body "$(cat /tmp/report.txt)" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
