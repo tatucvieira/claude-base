@@ -112,6 +112,11 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// ===== Health check (must be before auth middleware) =====
+app.get('/healthz', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // ===== Serve login page for unauthenticated users =====
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
