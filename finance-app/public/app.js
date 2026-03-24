@@ -66,8 +66,27 @@
         return div.innerHTML;
     }
 
+    // ===== Month State =====
+    let selectedMonth = getCurrentMonth();
+
+    function changeMonth(delta) {
+        const [y, m] = selectedMonth.split('-').map(Number);
+        const d = new Date(y, m - 1 + delta, 1);
+        selectedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        updateMonthLabel();
+        refreshCurrentView();
+    }
+
+    function updateMonthLabel() {
+        const [y, m] = selectedMonth.split('-').map(Number);
+        const d = new Date(y, m - 1, 1);
+        const label = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        const el = $('#month-label');
+        if (el) el.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+    }
+
     // ===== Navigation =====
-    const views = { dashboard: 'Dashboard', transactions: 'Transações', categories: 'Categorias', reports: 'Relatórios' };
+    const views = { dashboard: 'Dashboard', transactions: 'Transações', categories: 'Categorias', budget: 'Orçamento', recurring: 'Recorrentes', reports: 'Relatórios' };
 
     function switchView(viewName) {
         $$('.view').forEach(v => v.classList.remove('active'));
@@ -76,9 +95,17 @@
         $(`.nav-btn[data-view="${viewName}"]`).classList.add('active');
         $('#page-title').textContent = views[viewName];
 
+        // Show month nav on relevant views
+        const monthNav = $('#month-nav');
+        if (monthNav) {
+            monthNav.classList.toggle('visible', ['dashboard', 'budget'].includes(viewName));
+        }
+
         if (viewName === 'dashboard') renderDashboard();
         if (viewName === 'transactions') renderTransactions();
         if (viewName === 'categories') renderCategories();
+        if (viewName === 'budget') renderBudget();
+        if (viewName === 'recurring') renderRecurring();
         if (viewName === 'reports') renderReports();
     }
 
@@ -298,12 +325,12 @@
 
     // ===== Render: Dashboard =====
     async function renderDashboard() {
-        const month = getCurrentMonth();
+        const month = selectedMonth;
 
         try {
             const [stats, recentTxs, monthlyData, catData] = await Promise.all([
                 api.get(`/api/stats/summary?month=${month}`),
-                api.get('/api/transactions?limit=5'),
+                api.get(`/api/transactions?month=${month}&limit=5`),
                 api.get('/api/stats/monthly?months_back=6'),
                 api.get(`/api/stats/by-category?month=${month}&type=expense`),
             ]);
@@ -313,9 +340,36 @@
             $('#total-expenses').textContent = formatCurrency(stats.monthExpenses);
             $('#total-savings').textContent = formatCurrency(stats.monthSavings);
 
-            $('#recent-transactions').innerHTML = recentTxs.length
-                ? recentTxs.map(tx => renderTxRow(tx, false)).join('')
-                : '<div class="empty-state">Nenhuma transação ainda. Clique em "+ Nova Transação" para começar.</div>';
+            if (recentTxs.length === 0 && stats.balance === 0) {
+                // Onboarding empty state
+                $('#recent-transactions').innerHTML = `
+                    <div class="onboarding">
+                        <h2>Bem-vindo ao FinTrack!</h2>
+                        <p>Comece a controlar suas finanças em poucos passos.</p>
+                        <div class="onboarding-actions">
+                            <div class="onboarding-card" onclick="document.getElementById('btn-new-transaction').click()">
+                                <span class="ob-icon">💸</span>
+                                <span class="ob-label">Adicionar Gasto</span>
+                                <span class="ob-desc">Registre sua primeira despesa</span>
+                            </div>
+                            <div class="onboarding-card" onclick="document.querySelector('[data-view=budget]').click()">
+                                <span class="ob-icon">🎯</span>
+                                <span class="ob-label">Criar Orçamento</span>
+                                <span class="ob-desc">Defina limites mensais</span>
+                            </div>
+                            <div class="onboarding-card" onclick="document.querySelector('[data-view=recurring]').click()">
+                                <span class="ob-icon">🔄</span>
+                                <span class="ob-label">Gastos Fixos</span>
+                                <span class="ob-desc">Configure contas recorrentes</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                $('#recent-transactions').innerHTML = recentTxs.length
+                    ? recentTxs.map(tx => renderTxRow(tx, false)).join('')
+                    : '<div class="empty-state">Nenhuma transação neste mês.</div>';
+            }
 
             renderCategoryChart(catData);
             renderMonthlyChart(monthlyData);
@@ -439,6 +493,220 @@
     }
 
     $('#report-period').addEventListener('change', renderReports);
+
+    // ===== Render: Budget =====
+    async function renderBudget() {
+        const month = selectedMonth;
+        const monthInput = $('#budget-month');
+        if (monthInput) monthInput.value = month;
+
+        try {
+            const [budgetStatus, stats] = await Promise.all([
+                api.get(`/api/budgets/status?month=${month}`),
+                api.get(`/api/stats/summary?month=${month}`),
+            ]);
+
+            const totalBudget = budgetStatus.reduce((s, b) => s + b.amount, 0);
+            const totalSpent = budgetStatus.reduce((s, b) => s + b.spent, 0);
+            const overallPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+            const pctClass = overallPct >= 90 ? 'danger' : overallPct >= 70 ? 'warning' : 'safe';
+
+            $('#budget-summary').innerHTML = budgetStatus.length > 0 ? `
+                <div class="card">
+                    <span class="card-label">Orçamento Total</span>
+                    <span class="card-value" style="color:var(--blue)">${formatCurrency(totalBudget)}</span>
+                </div>
+                <div class="card">
+                    <span class="card-label">Gasto no Mês</span>
+                    <span class="card-value" style="color:var(--red)">${formatCurrency(totalSpent)}</span>
+                </div>
+                <div class="card">
+                    <span class="card-label">Restante</span>
+                    <span class="card-value" style="color:var(--${pctClass})">${formatCurrency(totalBudget - totalSpent)}</span>
+                </div>
+                <div class="card">
+                    <span class="card-label">Utilização</span>
+                    <span class="card-value ${pctClass}" style="color:var(--${pctClass})">${overallPct}%</span>
+                </div>
+            ` : '';
+
+            const list = $('#budget-list');
+            const empty = $('#no-budgets');
+
+            if (budgetStatus.length === 0) {
+                list.innerHTML = '';
+                empty.style.display = 'block';
+            } else {
+                empty.style.display = 'none';
+                list.innerHTML = budgetStatus.map(b => {
+                    const cat = getCategoryById(b.category_id);
+                    const pct = b.percentage;
+                    const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'safe';
+                    return `
+                        <div class="budget-row">
+                            <div class="tx-icon" style="background:${cat ? cat.color + '22' : '#66622'}">${cat ? cat.icon : '❓'}</div>
+                            <div class="budget-info">
+                                <div class="budget-cat-name">${cat ? escapeHtml(cat.name) : 'Outro'}</div>
+                                <div class="budget-amounts">${formatCurrency(b.spent)} de ${formatCurrency(b.amount)}</div>
+                            </div>
+                            <div class="budget-bar-container">
+                                <div class="budget-bar ${cls}" style="width:${Math.min(100, pct)}%"></div>
+                            </div>
+                            <div class="budget-pct ${cls}">${pct}%</div>
+                            <button class="btn-icon danger" onclick="window._deleteBudget('${b.id}')" title="Remover">✕</button>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } catch (err) {
+            showToast('Erro ao carregar orçamentos');
+            console.error(err);
+        }
+    }
+
+    $('#budget-month')?.addEventListener('change', (e) => {
+        selectedMonth = e.target.value;
+        updateMonthLabel();
+        renderBudget();
+    });
+
+    // Budget form
+    $('#btn-add-budget')?.addEventListener('click', () => {
+        const sel = $('#budget-category');
+        const expenseCats = categories.filter(c => c.type === 'expense' || c.type === 'both');
+        sel.innerHTML = expenseCats.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+        $('#budget-amount').value = '';
+        openModal('modal-budget');
+    });
+
+    $('#form-budget')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            await api.put('/api/budgets', {
+                category_id: $('#budget-category').value,
+                month: selectedMonth,
+                amount: parseFloat($('#budget-amount').value),
+            });
+            showToast('Orçamento salvo!');
+            closeModal('modal-budget');
+            renderBudget();
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    });
+
+    async function deleteBudget(id) {
+        if (!confirm('Remover este orçamento?')) return;
+        try {
+            await api.del(`/api/budgets/${id}`);
+            showToast('Orçamento removido');
+            renderBudget();
+        } catch (err) { showToast('Erro: ' + err.message); }
+    }
+    window._deleteBudget = deleteBudget;
+
+    // ===== Render: Recurring =====
+    let recType = 'expense';
+
+    async function renderRecurring() {
+        try {
+            const recurring = await api.get('/api/recurring');
+            const list = $('#recurring-list');
+            const empty = $('#no-recurring');
+
+            if (recurring.length === 0) {
+                list.innerHTML = '';
+                empty.style.display = 'block';
+            } else {
+                empty.style.display = 'none';
+                list.innerHTML = recurring.map(r => {
+                    const cat = getCategoryById(r.category_id);
+                    const sign = r.type === 'income' ? '+' : '-';
+                    return `
+                        <div class="tx-row">
+                            <div class="tx-icon" style="background:${cat ? cat.color + '22' : '#66622'}">${cat ? cat.icon : '❓'}</div>
+                            <div class="tx-info">
+                                <div class="tx-desc">${escapeHtml(r.description)}</div>
+                                <div class="tx-meta">${cat ? cat.name : 'Outro'} · Dia ${r.day_of_month} de cada mês${r.notes ? ' · ' + escapeHtml(r.notes) : ''}</div>
+                            </div>
+                            <div class="tx-amount ${r.type}">${sign} ${formatCurrency(r.amount)}</div>
+                            <div class="tx-actions">
+                                <button class="btn-icon danger" onclick="window._deleteRecurring('${r.id}')" title="Excluir">🗑️</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } catch (err) {
+            showToast('Erro ao carregar recorrências');
+        }
+    }
+
+    $('#btn-add-recurring')?.addEventListener('click', () => {
+        $('#form-recurring').reset();
+        recType = 'expense';
+        updateRecTypeToggle();
+        populateRecCategorySelect();
+        openModal('modal-recurring');
+    });
+
+    $$('#form-recurring .toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            recType = btn.dataset.rectype;
+            updateRecTypeToggle();
+            populateRecCategorySelect();
+        });
+    });
+
+    function updateRecTypeToggle() {
+        $$('#form-recurring .toggle-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.rectype === recType);
+        });
+    }
+
+    function populateRecCategorySelect() {
+        const sel = $('#rec-category');
+        const cats = categories.filter(c => c.type === recType || c.type === 'both');
+        sel.innerHTML = cats.map(c => `<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+    }
+
+    $('#form-recurring')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+            await api.post('/api/recurring', {
+                type: recType,
+                description: $('#rec-description').value.trim(),
+                amount: parseFloat($('#rec-amount').value),
+                category_id: $('#rec-category').value,
+                day_of_month: parseInt($('#rec-day').value),
+                notes: $('#rec-notes').value.trim(),
+            });
+            showToast('Recorrência criada!');
+            closeModal('modal-recurring');
+            renderRecurring();
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    });
+
+    $('#btn-generate-recurring')?.addEventListener('click', async () => {
+        try {
+            const result = await api.post('/api/recurring/generate', { month: getCurrentMonth() });
+            showToast(result.generated > 0 ? `${result.generated} transações geradas!` : 'Todas as recorrências já foram geradas este mês.');
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    });
+
+    async function deleteRecurring(id) {
+        if (!confirm('Excluir esta recorrência?')) return;
+        try {
+            await api.del(`/api/recurring/${id}`);
+            showToast('Recorrência excluída');
+            renderRecurring();
+        } catch (err) { showToast('Erro: ' + err.message); }
+    }
+    window._deleteRecurring = deleteRecurring;
 
     // ===== Charts (Canvas) =====
     function renderCategoryChart(catData) {
@@ -763,6 +1031,10 @@
         window.location.href = '/login';
     });
 
+    // ===== Month Navigation =====
+    $('#btn-prev-month')?.addEventListener('click', () => changeMonth(-1));
+    $('#btn-next-month')?.addEventListener('click', () => changeMonth(1));
+
     // ===== Init =====
     async function init() {
         // Check auth
@@ -787,6 +1059,7 @@
             console.error(err);
         }
 
+        updateMonthLabel();
         renderDashboard();
     }
 
