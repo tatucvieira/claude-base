@@ -1,0 +1,72 @@
+name: Railway Fix Root Dir
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fix root directory config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PROJECT_ID="b3a5da12-4cb8-4ce1-a9c8-c0008be7b56d"
+          SERVICE_ID="643c02ed-c86e-4a0d-abda-1cab26c9db7a"
+          ENV_ID="c3c66d13-1b88-410e-adf8-ad1a05fd41b2"
+          REPORT=""
+
+          gql() {
+            curl -s -X POST "$API" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$1"
+          }
+
+          # Set rootDirectory on service instance
+          echo "Setting rootDirectory on service instance..."
+          R1=$(gql '{"query":"mutation { serviceInstanceUpdate(serviceId: \"'$SERVICE_ID'\", environmentId: \"'$ENV_ID'\", input: { rootDirectory: \"finance-app\" }) }"}')
+          echo "rootDirectory result: $R1"
+          REPORT="### Set rootDirectory\n\`\`\`json\n$R1\n\`\`\`\n\n"
+
+          # Also try setting the builder to DOCKERFILE
+          echo "Setting builder to DOCKERFILE..."
+          R2=$(gql '{"query":"mutation { serviceInstanceUpdate(serviceId: \"'$SERVICE_ID'\", environmentId: \"'$ENV_ID'\", input: { builder: DOCKERFILE }) }"}')
+          echo "Builder result: $R2"
+          REPORT="$REPORT### Set builder\n\`\`\`json\n$R2\n\`\`\`\n\n"
+
+          # Set start command
+          R3=$(gql '{"query":"mutation { serviceInstanceUpdate(serviceId: \"'$SERVICE_ID'\", environmentId: \"'$ENV_ID'\", input: { startCommand: \"node server.js\" }) }"}')
+          REPORT="$REPORT### Set startCommand\n\`\`\`json\n$R3\n\`\`\`\n\n"
+
+          # Redeploy
+          echo "Triggering redeploy..."
+          R4=$(gql '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"'$ENV_ID'\", serviceId: \"'$SERVICE_ID'\") }"}')
+          echo "Redeploy: $R4"
+          REPORT="$REPORT### Redeploy\n\`\`\`json\n$R4\n\`\`\`\n\n"
+
+          # Wait and check
+          sleep 60
+
+          DEPLOYS=$(gql '{"query":"{ deployments(first: 3, input: { projectId: \"'$PROJECT_ID'\" }) { edges { node { id status createdAt } } } }"}')
+          REPORT="$REPORT### Deployments after fix\n\`\`\`json\n$(echo $DEPLOYS | jq .)\n\`\`\`\n\n"
+
+          LATEST_ID=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.id')
+          LATEST_STATUS=$(echo "$DEPLOYS" | jq -r '.data.deployments.edges[0].node.status')
+
+          BUILD=$(gql '{"query":"{ buildLogs(deploymentId: \"'$LATEST_ID'\", limit: 50) { message } }"}')
+          BUILD_MSG=$(echo "$BUILD" | jq -r '.data.buildLogs[].message' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | head -40)
+          REPORT="$REPORT### Build Logs ($LATEST_STATUS)\n\`\`\`\n$BUILD_MSG\n\`\`\`"
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          gh issue create \
+            --title "Railway Fix2: $(date -u +%H:%M)" \
+            --body "$(cat /tmp/report.txt)" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
