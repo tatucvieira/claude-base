@@ -4,7 +4,8 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "node server.js"
-healthcheckPath = "/api/auth/me"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 
