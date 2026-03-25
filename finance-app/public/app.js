@@ -88,7 +88,7 @@
     }
 
     // ===== Navigation =====
-    const views = { dashboard: 'Dashboard', transactions: 'Transações', categories: 'Categorias', budget: 'Orçamento', salary: 'Salário', recurring: 'Recorrentes', reports: 'Relatórios' };
+    const views = { dashboard: 'Visão geral', transactions: 'Transações', categories: 'Categorias', budget: 'Orçamento', salary: 'Salário', recurring: 'Recorrentes', reports: 'Relatórios' };
 
     function switchView(viewName) {
         $$('.view').forEach(v => v.classList.remove('active'));
@@ -307,14 +307,13 @@
     // ===== Render: Transaction Row =====
     function renderTxRow(tx, showActions = true) {
         const cat = getCategoryById(tx.category_id);
-        const icon = cat ? cat.icon : '❓';
         const catName = cat ? cat.name : 'Sem categoria';
-        const color = cat ? cat.color : '#666';
+        const color = cat ? cat.color : '#52525b';
         const sign = tx.type === 'income' ? '+' : '-';
 
         return `
             <div class="tx-row">
-                <div class="tx-icon" style="background:${color}22">${icon}</div>
+                <div class="tx-icon" style="background:${color}18"><span style="color:${color};font-size:11px;font-weight:700;">${catName.substring(0,2).toUpperCase()}</span></div>
                 <div class="tx-info">
                     <div class="tx-desc">${escapeHtml(tx.description)}</div>
                     <div class="tx-meta">${catName} · ${formatDate(tx.date)}${tx.notes ? ' · ' + escapeHtml(tx.notes) : ''}</div>
@@ -322,8 +321,8 @@
                 <div class="tx-amount ${tx.type}">${sign} ${formatCurrency(tx.amount)}</div>
                 ${showActions ? `
                 <div class="tx-actions">
-                    <button class="btn-icon" onclick="window._editTx('${tx.id}')" title="Editar">✏️</button>
-                    <button class="btn-icon danger" onclick="window._deleteTx('${tx.id}')" title="Excluir">🗑️</button>
+                    <button class="btn-icon" onclick="window._editTx('${tx.id}')" title="Editar">Edit</button>
+                    <button class="btn-icon danger" onclick="window._deleteTx('${tx.id}')" title="Excluir">&times;</button>
                 </div>` : ''}
             </div>
         `;
@@ -637,7 +636,7 @@
                             </div>
                             <div class="tx-amount ${r.type}">${sign} ${formatCurrency(r.amount)}</div>
                             <div class="tx-actions">
-                                <button class="btn-icon danger" onclick="window._deleteRecurring('${r.id}')" title="Excluir">🗑️</button>
+                                <button class="btn-icon danger" onclick="window._deleteRecurring('${r.id}')" title="Excluir">&times;</button>
                             </div>
                         </div>
                     `;
@@ -788,7 +787,7 @@
                         <div class="salary-config-actions">
                             <button class="btn-secondary" style="width:auto" onclick="window._generateSalary('${c.id}')">Gerar Transações</button>
                             <button class="btn-icon" onclick="window._editSalary('${c.id}')" title="Editar">✏️</button>
-                            <button class="btn-icon danger" onclick="window._deleteSalary('${c.id}')" title="Excluir">🗑️</button>
+                            <button class="btn-icon danger" onclick="window._deleteSalary('${c.id}')" title="Excluir">&times;</button>
                         </div>
                     </div>
                 `;
@@ -950,7 +949,7 @@
         const total = catData.reduce((s, c) => s + c.total, 0);
 
         if (catData.length === 0 || total === 0) {
-            ctx.fillStyle = '#8b8fa3';
+            ctx.fillStyle = '#71717a';
             ctx.font = '14px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('Sem despesas este mês', w / 2, h / 2);
@@ -980,7 +979,7 @@
             ctx.moveTo(cx, cy);
             ctx.arc(cx, cy, r, startAngle, startAngle + slice);
             ctx.closePath();
-            ctx.strokeStyle = '#1e2130';
+            ctx.strokeStyle = '#18181b';
             ctx.lineWidth = 2;
             ctx.stroke();
 
@@ -998,10 +997,10 @@
         // Donut hole
         ctx.beginPath();
         ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2);
-        ctx.fillStyle = '#1e2130';
+        ctx.fillStyle = '#18181b';
         ctx.fill();
 
-        ctx.fillStyle = '#e4e6f0';
+        ctx.fillStyle = '#fafafa';
         ctx.font = 'bold 16px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(formatCurrency(total), cx, cy + 6);
@@ -1023,7 +1022,7 @@
         const barGroupW = chartW / data.length;
         const barW = barGroupW * 0.3;
 
-        ctx.strokeStyle = '#2d3048';
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
         ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
             const y = padding.top + (chartH / 4) * i;
@@ -1037,18 +1036,18 @@
             const x = padding.left + barGroupW * i + barGroupW * 0.15;
 
             const incomeH = Math.max((d.income / maxVal) * chartH, 0);
-            ctx.fillStyle = '#22c55e';
+            ctx.fillStyle = '#4ade80';
             ctx.beginPath();
             roundedRect(ctx, x, padding.top + chartH - incomeH, barW, incomeH, 4);
             ctx.fill();
 
             const expenseH = Math.max((d.expense / maxVal) * chartH, 0);
-            ctx.fillStyle = '#ef4444';
+            ctx.fillStyle = '#f87171';
             ctx.beginPath();
             roundedRect(ctx, x + barW + 4, padding.top + chartH - expenseH, barW, expenseH, 4);
             ctx.fill();
 
-            ctx.fillStyle = '#8b8fa3';
+            ctx.fillStyle = '#71717a';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText(d.label, x + barW + 2, h - 12);
@@ -1067,7 +1066,7 @@
         const chartW = w - padding.left - padding.right;
         const chartH = h - padding.top - padding.bottom;
 
-        ctx.strokeStyle = '#2d3048';
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
         ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
             const y = padding.top + (chartH / 4) * i;
@@ -1099,10 +1098,10 @@
             });
         }
 
-        drawLine(data.map(d => d.income), '#22c55e');
-        drawLine(data.map(d => d.expense), '#ef4444');
+        drawLine(data.map(d => d.income), '#4ade80');
+        drawLine(data.map(d => d.expense), '#f87171');
 
-        ctx.fillStyle = '#8b8fa3';
+        ctx.fillStyle = '#71717a';
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         data.forEach((d, i) => {
@@ -1111,14 +1110,14 @@
         });
 
         ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#22c55e';
+        ctx.fillStyle = '#4ade80';
         ctx.fillRect(w - 180, 10, 12, 12);
-        ctx.fillStyle = '#e4e6f0';
+        ctx.fillStyle = '#fafafa';
         ctx.textAlign = 'left';
         ctx.fillText('Receitas', w - 164, 21);
-        ctx.fillStyle = '#ef4444';
+        ctx.fillStyle = '#f87171';
         ctx.fillRect(w - 90, 10, 12, 12);
-        ctx.fillStyle = '#e4e6f0';
+        ctx.fillStyle = '#fafafa';
         ctx.fillText('Despesas', w - 74, 21);
     }
 
