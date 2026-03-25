@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FinTrack — Controle Financeiro</title>
+    <title>fin. — Controle Financeiro</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,35 +11,34 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo">
-                <span class="logo-icon">₿</span>
-                <span class="logo-text">FinTrack</span>
+                <span class="logo-mark">fin<span>.</span></span>
             </div>
             <nav>
                 <button class="nav-btn active" data-view="dashboard">
-                    <span class="nav-icon">📊</span> Dashboard
+                    <span class="nav-icon">~</span>Visão geral
                 </button>
                 <button class="nav-btn" data-view="transactions">
-                    <span class="nav-icon">📋</span> Transações
+                    <span class="nav-icon">~</span>Transações
                 </button>
                 <button class="nav-btn" data-view="categories">
-                    <span class="nav-icon">🏷️</span> Categorias
+                    <span class="nav-icon">~</span>Categorias
                 </button>
                 <button class="nav-btn" data-view="budget">
-                    <span class="nav-icon">🎯</span> Orçamento
+                    <span class="nav-icon">~</span>Orçamento
                 </button>
                 <button class="nav-btn" data-view="salary">
-                    <span class="nav-icon">💼</span> Salário
+                    <span class="nav-icon">~</span>Salário
                 </button>
                 <button class="nav-btn" data-view="recurring">
-                    <span class="nav-icon">🔄</span> Recorrentes
+                    <span class="nav-icon">~</span>Recorrentes
                 </button>
                 <button class="nav-btn" data-view="reports">
-                    <span class="nav-icon">📈</span> Relatórios
+                    <span class="nav-icon">~</span>Relatórios
                 </button>
             </nav>
             <div class="sidebar-footer">
-                <button id="btn-export" class="btn-secondary">⬇ Exportar CSV</button>
-                <button id="btn-import" class="btn-secondary">⬆ Importar CSV</button>
+                <button id="btn-export" class="btn-secondary">Exportar CSV</button>
+                <button id="btn-import" class="btn-secondary">Importar CSV</button>
                 <input type="file" id="file-import" accept=".csv" hidden>
             </div>
         </aside>
@@ -58,10 +57,10 @@
                     <span class="header-date" id="header-date"></span>
                 </div>
                 <div class="header-right">
-                    <button class="btn-primary" id="btn-new-transaction">+ Nova Transação</button>
+                    <button class="btn-primary" id="btn-new-transaction">Nova transação</button>
                     <div class="user-menu">
-                        <button class="btn-user" id="btn-user">👤 <span id="user-name"></span></button>
-                        <button class="btn-icon danger" id="btn-logout" title="Sair">🚪</button>
+                        <button class="btn-user" id="btn-user"><span id="user-name"></span></button>
+                        <button class="btn-icon danger" id="btn-logout" title="Sair">Sair</button>
                     </div>
                 </div>
             </header>
