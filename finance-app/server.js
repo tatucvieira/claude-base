@@ -85,8 +85,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
   CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id);
   CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+  CREATE TABLE IF NOT EXISTS salary_configs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT 'Salário CLT',
+    gross_salary REAL NOT NULL CHECK(gross_salary > 0),
+    inss REAL NOT NULL DEFAULT 0,
+    irrf REAL NOT NULL DEFAULT 0,
+    dental REAL NOT NULL DEFAULT 0,
+    pension REAL NOT NULL DEFAULT 0,
+    meal_voucher REAL NOT NULL DEFAULT 0,
+    other_deductions REAL NOT NULL DEFAULT 0,
+    other_deductions_label TEXT DEFAULT '',
+    pay_day INTEGER NOT NULL DEFAULT 5 CHECK(pay_day >= 1 AND pay_day <= 28),
+    start_month TEXT NOT NULL,
+    end_month TEXT NOT NULL,
+    generated_months TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_budgets_user_month ON budgets(user_id, month);
   CREATE INDEX IF NOT EXISTS idx_recurring_user ON recurring_transactions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_salary_configs_user ON salary_configs(user_id);
 `);
 
 // Clean expired sessions on startup
@@ -486,6 +506,127 @@ app.post('/api/recurring/generate', requireAuth, (req, res) => {
   tx();
 
   res.json({ generated });
+});
+
+// --- Salary Configs ---
+app.get('/api/salary', requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM salary_configs WHERE user_id = ? ORDER BY start_month DESC').all(req.user.id);
+  res.json(rows);
+});
+
+app.get('/api/salary/:id', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT * FROM salary_configs WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Configuração não encontrada' });
+  res.json(row);
+});
+
+app.post('/api/salary', requireAuth, (req, res) => {
+  const { gross_salary, inss, irrf, dental, pension, meal_voucher, other_deductions, other_deductions_label, pay_day, start_month, end_month } = req.body;
+  if (!gross_salary || !start_month || !end_month) {
+    return res.status(400).json({ error: 'Salário bruto, mês inicial e mês final são obrigatórios' });
+  }
+  if (start_month < '2026-01' || end_month > '2026-12' || start_month > end_month) {
+    return res.status(400).json({ error: 'Vigência deve estar dentro de 2026 e mês inicial <= mês final' });
+  }
+  const id = genId();
+  db.prepare(`INSERT INTO salary_configs (id, user_id, gross_salary, inss, irrf, dental, pension, meal_voucher, other_deductions, other_deductions_label, pay_day, start_month, end_month)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, req.user.id, gross_salary, inss || 0, irrf || 0, dental || 0, pension || 0, meal_voucher || 0, other_deductions || 0, other_deductions_label || '', pay_day || 5, start_month, end_month);
+  res.status(201).json({ id, gross_salary, inss, irrf, dental, pension, meal_voucher, other_deductions, other_deductions_label, pay_day, start_month, end_month });
+});
+
+app.put('/api/salary/:id', requireAuth, (req, res) => {
+  const { gross_salary, inss, irrf, dental, pension, meal_voucher, other_deductions, other_deductions_label, pay_day, start_month, end_month } = req.body;
+  if (start_month < '2026-01' || end_month > '2026-12' || start_month > end_month) {
+    return res.status(400).json({ error: 'Vigência deve estar dentro de 2026' });
+  }
+  const result = db.prepare(`UPDATE salary_configs SET gross_salary=?, inss=?, irrf=?, dental=?, pension=?, meal_voucher=?, other_deductions=?, other_deductions_label=?, pay_day=?, start_month=?, end_month=? WHERE id=? AND user_id=?`)
+    .run(gross_salary, inss || 0, irrf || 0, dental || 0, pension || 0, meal_voucher || 0, other_deductions || 0, other_deductions_label || '', pay_day || 5, start_month, end_month, req.params.id, req.user.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Configuração não encontrada' });
+  res.json({ id: req.params.id, gross_salary, inss, irrf, dental, pension, meal_voucher, other_deductions, other_deductions_label, pay_day, start_month, end_month });
+});
+
+app.delete('/api/salary/:id', requireAuth, (req, res) => {
+  const result = db.prepare('DELETE FROM salary_configs WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Configuração não encontrada' });
+  res.json({ success: true });
+});
+
+app.post('/api/salary/:id/generate', requireAuth, (req, res) => {
+  const uid = req.user.id;
+  const config = db.prepare('SELECT * FROM salary_configs WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!config) return res.status(404).json({ error: 'Configuração não encontrada' });
+
+  // Find or create salary category
+  let salaryCat = db.prepare("SELECT id FROM categories WHERE user_id = ? AND name = 'Salário'").get(uid);
+  if (!salaryCat) {
+    const catId = genId();
+    db.prepare('INSERT INTO categories (id, user_id, name, icon, color, type) VALUES (?, ?, ?, ?, ?, ?)').run(catId, uid, 'Salário', '💼', '#22c55e', 'income');
+    salaryCat = { id: catId };
+  }
+
+  // Find or create deduction categories
+  const deductionCategories = {};
+  const deductionDefs = [
+    ['inss', 'INSS', '🏛️', '#3b82f6'],
+    ['irrf', 'Imposto de Renda', '📄', '#8b5cf6'],
+    ['dental', 'Plano Odontológico', '🦷', '#06b6d4'],
+    ['pension', 'Previdência Privada', '🏦', '#14b8a6'],
+    ['meal_voucher', 'Vale Refeição', '🍽️', '#f59e0b'],
+    ['other_deductions', config.other_deductions_label || 'Outros Descontos', '📋', '#6366f1'],
+  ];
+
+  for (const [key, name, icon, color] of deductionDefs) {
+    if (config[key] <= 0 && key !== 'other_deductions') continue;
+    if (key === 'other_deductions' && config[key] <= 0) continue;
+    let cat = db.prepare("SELECT id FROM categories WHERE user_id = ? AND name = ?").get(uid, name);
+    if (!cat) {
+      const catId = genId();
+      db.prepare('INSERT INTO categories (id, user_id, name, icon, color, type) VALUES (?, ?, ?, ?, ?, ?)').run(catId, uid, name, icon, color, 'expense');
+      cat = { id: catId };
+    }
+    deductionCategories[key] = cat.id;
+  }
+
+  const alreadyGenerated = (config.generated_months || '').split(',').filter(Boolean);
+  let generated = 0;
+
+  // Generate months in range
+  const [startY, startM] = config.start_month.split('-').map(Number);
+  const [endY, endM] = config.end_month.split('-').map(Number);
+
+  const insertTx = db.prepare('INSERT INTO transactions (id, user_id, type, description, amount, category_id, date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+
+  const txn = db.transaction(() => {
+    for (let m = startM; m <= endM; m++) {
+      const monthKey = `2026-${String(m).padStart(2, '0')}`;
+      if (alreadyGenerated.includes(monthKey)) continue;
+
+      const payDate = `${monthKey}-${String(config.pay_day).padStart(2, '0')}`;
+      const totalDeductions = (config.inss || 0) + (config.irrf || 0) + (config.dental || 0) + (config.pension || 0) + (config.meal_voucher || 0) + (config.other_deductions || 0);
+      const netSalary = config.gross_salary - totalDeductions;
+
+      // Income: net salary
+      insertTx.run(genId(), uid, 'income', 'Salário Líquido', netSalary, salaryCat.id, payDate, `Bruto: R$ ${config.gross_salary.toFixed(2)} | Descontos: R$ ${totalDeductions.toFixed(2)}`);
+
+      // Expense transactions for each deduction
+      for (const [key, , , ] of deductionDefs) {
+        if (config[key] > 0 && deductionCategories[key]) {
+          const label = deductionDefs.find(d => d[0] === key)[1];
+          insertTx.run(genId(), uid, 'expense', label, config[key], deductionCategories[key], payDate, 'Desconto folha de pagamento');
+        }
+      }
+
+      alreadyGenerated.push(monthKey);
+      generated++;
+    }
+
+    db.prepare('UPDATE salary_configs SET generated_months = ? WHERE id = ?')
+      .run(alreadyGenerated.join(','), config.id);
+  });
+  txn();
+
+  res.json({ generated, months: alreadyGenerated });
 });
 
 // Start server
