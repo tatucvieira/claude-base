@@ -27,6 +27,9 @@
                 <button class="nav-btn" data-view="budget">
                     <span class="nav-icon">🎯</span> Orçamento
                 </button>
+                <button class="nav-btn" data-view="salary">
+                    <span class="nav-icon">💼</span> Salário
+                </button>
                 <button class="nav-btn" data-view="recurring">
                     <span class="nav-icon">🔄</span> Recorrentes
                 </button>
@@ -114,7 +117,7 @@
                     <select id="filter-category" class="input">
                         <option value="all">Todas as categorias</option>
                     </select>
-                    <input type="month" id="filter-month" class="input">
+                    <input type="month" id="filter-month" class="input" min="2026-01" max="2026-12">
                 </div>
                 <div class="panel">
                     <div id="all-transactions" class="transaction-list"></div>
@@ -164,13 +167,11 @@
                     <div id="top-categories" class="top-categories-list"></div>
                 </div>
             </section>
-        </main>
-    </div>
 
             <!-- Budget View -->
             <section id="view-budget" class="view">
                 <div class="filters-bar">
-                    <input type="month" id="budget-month" class="input" style="max-width:200px">
+                    <input type="month" id="budget-month" class="input" style="max-width:200px" min="2026-01" max="2026-12">
                     <button class="btn-primary" id="btn-add-budget">+ Definir Orçamento</button>
                 </div>
                 <div class="budget-summary" id="budget-summary"></div>
@@ -181,6 +182,18 @@
                         <p>Nenhum orçamento definido para este mês.</p>
                         <p style="margin-top:8px;font-size:13px;">Defina limites por categoria para controlar seus gastos.</p>
                     </div>
+                </div>
+            </section>
+
+            <!-- Salary View -->
+            <section id="view-salary" class="view">
+                <div class="filters-bar">
+                    <button class="btn-primary" id="btn-add-salary">+ Configurar Salário</button>
+                </div>
+                <div id="salary-configs"></div>
+                <div id="no-salary" class="empty-state" style="display:none;">
+                    <p>Nenhuma configuração salarial.</p>
+                    <p style="margin-top:8px;font-size:13px;">Configure seu salário CLT com todos os descontos para gerar transações automaticamente.</p>
                 </div>
             </section>
 
@@ -198,6 +211,8 @@
                     </div>
                 </div>
             </section>
+        </main>
+    </div>
 
     <!-- Modal: Definir Orçamento -->
     <div class="modal-overlay" id="modal-budget">
@@ -261,6 +276,81 @@
                 <div class="form-actions">
                     <button type="button" class="btn-secondary" data-close="modal-recurring">Cancelar</button>
                     <button type="submit" class="btn-primary">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Configurar Salário -->
+    <div class="modal-overlay" id="modal-salary">
+        <div class="modal" style="max-width:560px;">
+            <div class="modal-header">
+                <h2 id="modal-salary-title">Configurar Salário CLT</h2>
+                <button class="modal-close" data-close="modal-salary">&times;</button>
+            </div>
+            <form id="form-salary">
+                <input type="hidden" id="sal-id">
+                <div class="salary-section">
+                    <h4 class="salary-section-title">Rendimentos</h4>
+                    <div class="form-group">
+                        <label for="sal-gross">Salário Bruto (R$)</label>
+                        <input type="number" id="sal-gross" class="input" required min="1" step="0.01" placeholder="0,00">
+                    </div>
+                </div>
+                <div class="salary-section">
+                    <h4 class="salary-section-title salary-deductions-title">Descontos</h4>
+                    <div class="salary-grid">
+                        <div class="form-group">
+                            <label for="sal-inss">INSS (R$)</label>
+                            <input type="number" id="sal-inss" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-irrf">Imposto de Renda (R$)</label>
+                            <input type="number" id="sal-irrf" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-dental">Plano Odontológico (R$)</label>
+                            <input type="number" id="sal-dental" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-pension">Previdência Privada (R$)</label>
+                            <input type="number" id="sal-pension" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-meal">Vale Refeição (R$)</label>
+                            <input type="number" id="sal-meal" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-other">Outros Descontos (R$)</label>
+                            <input type="number" id="sal-other" class="input" min="0" step="0.01" placeholder="0,00">
+                        </div>
+                    </div>
+                    <div class="form-group" id="sal-other-label-group" style="display:none;">
+                        <label for="sal-other-label">Descrição do Outro Desconto</label>
+                        <input type="text" id="sal-other-label" class="input" placeholder="Ex: Seguro de Vida">
+                    </div>
+                </div>
+                <div class="salary-section">
+                    <h4 class="salary-section-title">Vigência e Pagamento</h4>
+                    <div class="salary-grid">
+                        <div class="form-group">
+                            <label for="sal-start">Mês Inicial</label>
+                            <input type="month" id="sal-start" class="input" required min="2026-01" max="2026-12">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-end">Mês Final</label>
+                            <input type="month" id="sal-end" class="input" required min="2026-01" max="2026-12">
+                        </div>
+                        <div class="form-group">
+                            <label for="sal-day">Dia do Pagamento</label>
+                            <input type="number" id="sal-day" class="input" required min="1" max="28" value="5" placeholder="5">
+                        </div>
+                    </div>
+                </div>
+                <div class="salary-preview" id="salary-preview"></div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" data-close="modal-salary">Cancelar</button>
+                    <button type="submit" class="btn-primary">Salvar Configuração</button>
                 </div>
             </form>
         </div>
