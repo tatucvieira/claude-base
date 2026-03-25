@@ -66,13 +66,15 @@
         return div.innerHTML;
     }
 
-    // ===== Month State =====
-    let selectedMonth = getCurrentMonth();
+    // ===== Month State (restricted to 2026) =====
+    const YEAR = 2026;
+    let selectedMonth = getCurrentMonth().startsWith('2026') ? getCurrentMonth() : '2026-01';
 
     function changeMonth(delta) {
         const [y, m] = selectedMonth.split('-').map(Number);
-        const d = new Date(y, m - 1 + delta, 1);
-        selectedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const newM = m + delta;
+        if (newM < 1 || newM > 12) return; // Stay within 2026
+        selectedMonth = `${YEAR}-${String(newM).padStart(2, '0')}`;
         updateMonthLabel();
         refreshCurrentView();
     }
@@ -86,7 +88,7 @@
     }
 
     // ===== Navigation =====
-    const views = { dashboard: 'Dashboard', transactions: 'Transações', categories: 'Categorias', budget: 'Orçamento', recurring: 'Recorrentes', reports: 'Relatórios' };
+    const views = { dashboard: 'Dashboard', transactions: 'Transações', categories: 'Categorias', budget: 'Orçamento', salary: 'Salário', recurring: 'Recorrentes', reports: 'Relatórios' };
 
     function switchView(viewName) {
         $$('.view').forEach(v => v.classList.remove('active'));
@@ -105,6 +107,7 @@
         if (viewName === 'transactions') renderTransactions();
         if (viewName === 'categories') renderCategories();
         if (viewName === 'budget') renderBudget();
+        if (viewName === 'salary') renderSalary();
         if (viewName === 'recurring') renderRecurring();
         if (viewName === 'reports') renderReports();
     }
@@ -133,7 +136,10 @@
     $('#btn-new-transaction').addEventListener('click', () => {
         $('#tx-id').value = '';
         $('#form-transaction').reset();
-        $('#tx-date').value = new Date().toISOString().split('T')[0];
+        const txDateEl = $('#tx-date');
+        txDateEl.value = new Date().toISOString().split('T')[0];
+        txDateEl.min = '2026-01-01';
+        txDateEl.max = '2026-12-31';
         txType = 'expense';
         updateTxTypeToggle();
         populateCategorySelect();
@@ -707,6 +713,231 @@
         } catch (err) { showToast('Erro: ' + err.message); }
     }
     window._deleteRecurring = deleteRecurring;
+
+    // ===== Render: Salary =====
+    function formatMonthLabel(monthKey) {
+        const [y, m] = monthKey.split('-').map(Number);
+        const d = new Date(y, m - 1, 1);
+        return d.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
+    }
+
+    function getMonthsInRange(start, end) {
+        const months = [];
+        const [, sm] = start.split('-').map(Number);
+        const [, em] = end.split('-').map(Number);
+        for (let m = sm; m <= em; m++) {
+            months.push(`2026-${String(m).padStart(2, '0')}`);
+        }
+        return months;
+    }
+
+    async function renderSalary() {
+        try {
+            const configs = await api.get('/api/salary');
+            const container = $('#salary-configs');
+            const empty = $('#no-salary');
+
+            if (configs.length === 0) {
+                container.innerHTML = '';
+                empty.style.display = 'block';
+                return;
+            }
+
+            empty.style.display = 'none';
+            container.innerHTML = configs.map(c => {
+                const totalDeductions = (c.inss || 0) + (c.irrf || 0) + (c.dental || 0) + (c.pension || 0) + (c.meal_voucher || 0) + (c.other_deductions || 0);
+                const netSalary = c.gross_salary - totalDeductions;
+                const generated = (c.generated_months || '').split(',').filter(Boolean);
+                const allMonths = getMonthsInRange(c.start_month, c.end_month);
+
+                const deductions = [
+                    ['INSS', c.inss],
+                    ['Imposto de Renda', c.irrf],
+                    ['Plano Odontológico', c.dental],
+                    ['Previdência Privada', c.pension],
+                    ['Vale Refeição', c.meal_voucher],
+                    [c.other_deductions_label || 'Outros', c.other_deductions],
+                ].filter(d => d[1] > 0);
+
+                return `
+                    <div class="salary-config-card">
+                        <div class="salary-config-header">
+                            <div>
+                                <h3>Salário CLT</h3>
+                                <div style="font-size:14px;color:var(--text-muted);margin-top:2px;">Bruto: ${formatCurrency(c.gross_salary)}</div>
+                            </div>
+                            <div class="salary-net">${formatCurrency(netSalary)}</div>
+                        </div>
+                        <div class="salary-config-period">
+                            Vigência: ${formatMonthLabel(c.start_month)} a ${formatMonthLabel(c.end_month)} · Pagamento dia ${c.pay_day}
+                        </div>
+                        <div class="salary-breakdown">
+                            ${deductions.map(([label, val]) => `
+                                <div class="salary-breakdown-item">
+                                    <span class="label">${escapeHtml(label)}</span>
+                                    <span class="value red">-${formatCurrency(val)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div class="salary-months-grid">
+                            ${allMonths.map(m => {
+                                const isGen = generated.includes(m);
+                                return `<span class="salary-month-badge ${isGen ? 'generated' : 'pending'}">${formatMonthLabel(m)} ${isGen ? '(gerado)' : ''}</span>`;
+                            }).join('')}
+                        </div>
+                        <div class="salary-config-actions">
+                            <button class="btn-secondary" style="width:auto" onclick="window._generateSalary('${c.id}')">Gerar Transações</button>
+                            <button class="btn-icon" onclick="window._editSalary('${c.id}')" title="Editar">✏️</button>
+                            <button class="btn-icon danger" onclick="window._deleteSalary('${c.id}')" title="Excluir">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (err) {
+            showToast('Erro ao carregar configurações salariais');
+            console.error(err);
+        }
+    }
+
+    // Salary preview in modal
+    function updateSalaryPreview() {
+        const gross = parseFloat($('#sal-gross')?.value) || 0;
+        const inss = parseFloat($('#sal-inss')?.value) || 0;
+        const irrf = parseFloat($('#sal-irrf')?.value) || 0;
+        const dental = parseFloat($('#sal-dental')?.value) || 0;
+        const pension = parseFloat($('#sal-pension')?.value) || 0;
+        const meal = parseFloat($('#sal-meal')?.value) || 0;
+        const other = parseFloat($('#sal-other')?.value) || 0;
+        const total = inss + irrf + dental + pension + meal + other;
+        const net = gross - total;
+
+        const preview = $('#salary-preview');
+        if (gross > 0) {
+            preview.classList.add('visible');
+            preview.innerHTML = `
+                <div class="salary-preview-title">Resumo do Holerite</div>
+                <div class="salary-preview-row"><span>Salário Bruto</span><span class="green">${formatCurrency(gross)}</span></div>
+                ${inss > 0 ? `<div class="salary-preview-row"><span>INSS</span><span class="red">-${formatCurrency(inss)}</span></div>` : ''}
+                ${irrf > 0 ? `<div class="salary-preview-row"><span>Imposto de Renda</span><span class="red">-${formatCurrency(irrf)}</span></div>` : ''}
+                ${dental > 0 ? `<div class="salary-preview-row"><span>Plano Odontológico</span><span class="red">-${formatCurrency(dental)}</span></div>` : ''}
+                ${pension > 0 ? `<div class="salary-preview-row"><span>Previdência Privada</span><span class="red">-${formatCurrency(pension)}</span></div>` : ''}
+                ${meal > 0 ? `<div class="salary-preview-row"><span>Vale Refeição</span><span class="red">-${formatCurrency(meal)}</span></div>` : ''}
+                ${other > 0 ? `<div class="salary-preview-row"><span>${escapeHtml($('#sal-other-label')?.value || 'Outros')}</span><span class="red">-${formatCurrency(other)}</span></div>` : ''}
+                <div class="salary-preview-row total"><span>Salário Líquido</span><span class="green">${formatCurrency(net)}</span></div>
+            `;
+        } else {
+            preview.classList.remove('visible');
+        }
+
+        // Show/hide other label field
+        const otherGroup = $('#sal-other-label-group');
+        if (otherGroup) otherGroup.style.display = other > 0 ? 'block' : 'none';
+    }
+
+    // Attach preview updates to all salary inputs
+    ['sal-gross', 'sal-inss', 'sal-irrf', 'sal-dental', 'sal-pension', 'sal-meal', 'sal-other', 'sal-other-label'].forEach(id => {
+        const el = $(`#${id}`);
+        if (el) el.addEventListener('input', updateSalaryPreview);
+    });
+
+    // Open new salary form
+    $('#btn-add-salary')?.addEventListener('click', () => {
+        const form = $('#form-salary');
+        form.reset();
+        $('#sal-id').value = '';
+        $('#sal-start').value = '2026-01';
+        $('#sal-end').value = '2026-12';
+        $('#sal-day').value = '5';
+        $('#modal-salary-title').textContent = 'Configurar Salário CLT';
+        $('#salary-preview').classList.remove('visible');
+        $('#sal-other-label-group').style.display = 'none';
+        openModal('modal-salary');
+    });
+
+    // Submit salary form
+    $('#form-salary')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const existingId = $('#sal-id').value;
+        const data = {
+            gross_salary: parseFloat($('#sal-gross').value),
+            inss: parseFloat($('#sal-inss').value) || 0,
+            irrf: parseFloat($('#sal-irrf').value) || 0,
+            dental: parseFloat($('#sal-dental').value) || 0,
+            pension: parseFloat($('#sal-pension').value) || 0,
+            meal_voucher: parseFloat($('#sal-meal').value) || 0,
+            other_deductions: parseFloat($('#sal-other').value) || 0,
+            other_deductions_label: $('#sal-other-label').value.trim(),
+            pay_day: parseInt($('#sal-day').value) || 5,
+            start_month: $('#sal-start').value,
+            end_month: $('#sal-end').value,
+        };
+
+        try {
+            if (existingId) {
+                await api.put(`/api/salary/${existingId}`, data);
+                showToast('Configuração atualizada!');
+            } else {
+                await api.post('/api/salary', data);
+                showToast('Salário configurado!');
+            }
+            closeModal('modal-salary');
+            renderSalary();
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    });
+
+    async function editSalary(id) {
+        try {
+            const c = await api.get(`/api/salary/${id}`);
+            $('#sal-id').value = c.id;
+            $('#sal-gross').value = c.gross_salary;
+            $('#sal-inss').value = c.inss || '';
+            $('#sal-irrf').value = c.irrf || '';
+            $('#sal-dental').value = c.dental || '';
+            $('#sal-pension').value = c.pension || '';
+            $('#sal-meal').value = c.meal_voucher || '';
+            $('#sal-other').value = c.other_deductions || '';
+            $('#sal-other-label').value = c.other_deductions_label || '';
+            $('#sal-day').value = c.pay_day || 5;
+            $('#sal-start').value = c.start_month;
+            $('#sal-end').value = c.end_month;
+            $('#modal-salary-title').textContent = 'Editar Salário CLT';
+            updateSalaryPreview();
+            openModal('modal-salary');
+        } catch (err) {
+            showToast('Erro ao carregar configuração');
+        }
+    }
+
+    async function deleteSalary(id) {
+        if (!confirm('Excluir esta configuração salarial? As transações já geradas não serão removidas.')) return;
+        try {
+            await api.del(`/api/salary/${id}`);
+            showToast('Configuração excluída');
+            renderSalary();
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    }
+
+    async function generateSalary(id) {
+        try {
+            const result = await api.post(`/api/salary/${id}/generate`, {});
+            if (result.generated > 0) {
+                showToast(`${result.generated} meses de transações gerados!`);
+            } else {
+                showToast('Todos os meses já foram gerados.');
+            }
+            renderSalary();
+        } catch (err) {
+            showToast('Erro: ' + err.message);
+        }
+    }
+
+    window._editSalary = editSalary;
+    window._deleteSalary = deleteSalary;
+    window._generateSalary = generateSalary;
 
     // ===== Charts (Canvas) =====
     function renderCategoryChart(catData) {
