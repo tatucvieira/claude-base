@@ -1,0 +1,196 @@
+name: Test Salary Feature
+on:
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run salary E2E tests
+        run: |
+          BASE="https://web-production-0864d.up.railway.app"
+          REPORT="## Salary Feature E2E Tests\n\n"
+          PASS=0
+          FAIL=0
+          CJ="/tmp/cookies.txt"
+
+          check() {
+            local name="$1" expected="$2" actual="$3"
+            if echo "$actual" | grep -q "$expected"; then
+              REPORT="$REPORT- ✅ **$name**\n"
+              PASS=$((PASS+1))
+            else
+              REPORT="$REPORT- ❌ **$name** (expected: $expected, got: $(echo $actual | head -c 100))\n"
+              FAIL=$((FAIL+1))
+            fi
+          }
+
+          # Register fresh user
+          REPORT="$REPORT### Setup\n"
+          REG=$(curl -s -X POST "$BASE/api/auth/register" \
+            -H "Content-Type: application/json" -c "$CJ" \
+            -d '{"username":"salary_test_user","password":"test123456","display_name":"Salary Tester"}')
+          check "Register user" "success" "$REG"
+
+          CATS=$(curl -s -b "$CJ" "$BASE/api/categories")
+          EXPENSE_CAT=$(echo "$CATS" | jq -r '[.[] | select(.type=="expense")][0].id')
+          INCOME_CAT=$(echo "$CATS" | jq -r '[.[] | select(.type=="income")][0].id')
+          REPORT="$REPORT\n"
+
+          # Test salary config CRUD
+          REPORT="$REPORT### Salary Config\n"
+          SAL=$(curl -s -X POST "$BASE/api/salary" \
+            -H "Content-Type: application/json" -b "$CJ" \
+            -d '{
+              "gross_salary": 15000,
+              "inss": 1557.20,
+              "irrf": 1880.64,
+              "dental": 32.50,
+              "pension": 750,
+              "meal_voucher": 200,
+              "other_deductions": 45.90,
+              "other_deductions_label": "Seguro de Vida",
+              "pay_day": 5,
+              "start_month": "2026-01",
+              "end_month": "2026-12"
+            }')
+          check "Create salary config" "gross_salary" "$SAL"
+          SAL_ID=$(echo "$SAL" | jq -r '.id // empty')
+          REPORT="$REPORT  Config ID: \`$SAL_ID\`\n"
+
+          # Verify net calculation
+          GROSS=15000
+          DEDUCTIONS=$(echo "1557.20 + 1880.64 + 32.50 + 750 + 200 + 45.90" | bc)
+          NET=$(echo "$GROSS - $DEDUCTIONS" | bc)
+          REPORT="$REPORT  Gross: R$ $GROSS | Deductions: R$ $DEDUCTIONS | Net: R$ $NET\n"
+
+          # List salary configs
+          SAL_LIST=$(curl -s -b "$CJ" "$BASE/api/salary")
+          SAL_COUNT=$(echo "$SAL_LIST" | jq 'length')
+          check "List salary configs (1)" "1" "$SAL_COUNT"
+
+          # Get single config
+          SAL_GET=$(curl -s -b "$CJ" "$BASE/api/salary/$SAL_ID")
+          check "Get config has gross_salary 15000" "15000" "$SAL_GET"
+          check "Get config has INSS" "1557.2" "$SAL_GET"
+          check "Get config has dental" "32.5" "$SAL_GET"
+
+          # Update salary config
+          SAL_UPD=$(curl -s -X PUT "$BASE/api/salary/$SAL_ID" \
+            -H "Content-Type: application/json" -b "$CJ" \
+            -d '{
+              "gross_salary": 16000,
+              "inss": 1557.20,
+              "irrf": 2050.00,
+              "dental": 32.50,
+              "pension": 800,
+              "meal_voucher": 200,
+              "other_deductions": 45.90,
+              "other_deductions_label": "Seguro de Vida",
+              "pay_day": 5,
+              "start_month": "2026-03",
+              "end_month": "2026-12"
+            }')
+          check "Update salary config" "16000" "$SAL_UPD"
+          check "Updated IRRF" "2050" "$SAL_UPD"
+          REPORT="$REPORT\n"
+
+          # Validate 2026 restriction
+          REPORT="$REPORT### Validation\n"
+          BAD=$(curl -s -X POST "$BASE/api/salary" \
+            -H "Content-Type: application/json" -b "$CJ" \
+            -o /tmp/bad.txt -w "%{http_code}" \
+            -d '{"gross_salary":10000,"inss":500,"irrf":300,"dental":0,"pension":0,"meal_voucher":0,"other_deductions":0,"pay_day":5,"start_month":"2025-01","end_month":"2025-12"}')
+          check "Reject dates outside 2026" "400" "$BAD"
+
+          BAD2=$(curl -s -X POST "$BASE/api/salary" \
+            -H "Content-Type: application/json" -b "$CJ" \
+            -o /tmp/bad2.txt -w "%{http_code}" \
+            -d '{"gross_salary":10000,"inss":500,"irrf":300,"dental":0,"pension":0,"meal_voucher":0,"other_deductions":0,"pay_day":5,"start_month":"2026-06","end_month":"2026-03"}')
+          check "Reject start > end" "400" "$BAD2"
+          REPORT="$REPORT\n"
+
+          # Generate transactions
+          REPORT="$REPORT### Transaction Generation\n"
+          GEN=$(curl -s -X POST "$BASE/api/salary/$SAL_ID/generate" \
+            -H "Content-Type: application/json" -b "$CJ" -d '{}')
+          GEN_COUNT=$(echo "$GEN" | jq '.generated')
+          check "Generated 10 months (Mar-Dec)" "10" "$GEN_COUNT"
+          REPORT="$REPORT  Generated: $GEN_COUNT months\n"
+
+          # Check generated months
+          GEN_MONTHS=$(echo "$GEN" | jq -r '.months | join(",")')
+          REPORT="$REPORT  Months: $GEN_MONTHS\n"
+
+          # Check transactions were created
+          TXS=$(curl -s -b "$CJ" "$BASE/api/transactions?month=2026-03")
+          TX_COUNT=$(echo "$TXS" | jq 'length')
+          REPORT="$REPORT  March transactions: $TX_COUNT\n"
+          # Should have: 1 income (net salary) + N expense deductions (INSS, IRRF, dental, pension, meal, other = 6)
+          check "March has 7 transactions (1 income + 6 deductions)" "7" "$TX_COUNT"
+
+          # Verify the income is net salary
+          NET_TX=$(echo "$TXS" | jq -r '[.[] | select(.type=="income")][0]')
+          NET_AMT=$(echo "$NET_TX" | jq '.amount')
+          REPORT="$REPORT  Net salary transaction: R$ $NET_AMT\n"
+          # Net = 16000 - 1557.20 - 2050 - 32.50 - 800 - 200 - 45.90 = 11314.40
+          check "Net salary is 11314.4" "11314.4" "$NET_AMT"
+
+          # Verify INSS deduction exists
+          INSS_TX=$(echo "$TXS" | jq -r '[.[] | select(.description=="INSS")][0].amount')
+          check "INSS deduction is 1557.2" "1557.2" "$INSS_TX"
+
+          # Idempotency - generate again should be 0
+          GEN2=$(curl -s -X POST "$BASE/api/salary/$SAL_ID/generate" \
+            -H "Content-Type: application/json" -b "$CJ" -d '{}')
+          GEN2_COUNT=$(echo "$GEN2" | jq '.generated')
+          check "Re-generate is idempotent (0)" "0" "$GEN2_COUNT"
+
+          # Check total transactions across all months
+          ALL_TXS=$(curl -s -b "$CJ" "$BASE/api/transactions")
+          ALL_COUNT=$(echo "$ALL_TXS" | jq 'length')
+          REPORT="$REPORT  Total transactions (all months): $ALL_COUNT\n"
+          # 10 months * 7 transactions each = 70
+          check "Total 70 transactions (10 months x 7)" "70" "$ALL_COUNT"
+          REPORT="$REPORT\n"
+
+          # Check new categories were auto-created
+          REPORT="$REPORT### Auto-created Categories\n"
+          NEW_CATS=$(curl -s -b "$CJ" "$BASE/api/categories")
+          INSS_CAT=$(echo "$NEW_CATS" | jq '[.[] | select(.name=="INSS")] | length')
+          IRRF_CAT=$(echo "$NEW_CATS" | jq '[.[] | select(.name=="Imposto de Renda")] | length')
+          DENTAL_CAT=$(echo "$NEW_CATS" | jq '[.[] | select(.name=="Plano Odontológico")] | length')
+          check "INSS category created" "1" "$INSS_CAT"
+          check "IRRF category created" "1" "$IRRF_CAT"
+          check "Dental category created" "1" "$DENTAL_CAT"
+
+          # Stats check
+          REPORT="$REPORT\n### Stats Verification\n"
+          STATS=$(curl -s -b "$CJ" "$BASE/api/stats/summary?month=2026-06")
+          JUNE_INC=$(echo "$STATS" | jq '.monthIncome')
+          JUNE_EXP=$(echo "$STATS" | jq '.monthExpenses')
+          REPORT="$REPORT  June — Income: $JUNE_INC, Expenses: $JUNE_EXP\n"
+          check "June income matches net salary" "11314.4" "$JUNE_INC"
+
+          # Delete config
+          REPORT="$REPORT\n### Cleanup\n"
+          DEL=$(curl -s -X DELETE "$BASE/api/salary/$SAL_ID" -b "$CJ")
+          check "Delete salary config" "success" "$DEL"
+
+          # Summary
+          TOTAL=$((PASS+FAIL))
+          REPORT="$REPORT\n---\n## Summary: $PASS/$TOTAL passed"
+          [ $FAIL -gt 0 ] && REPORT="$REPORT, **$FAIL FAILED**" || REPORT="$REPORT ✅ All tests passed!"
+
+          echo -e "$REPORT" > /tmp/report.txt
+
+      - name: Post report
+        if: always()
+        run: |
+          gh issue create \
+            --title "Salary E2E Tests: $(date -u +'%Y-%m-%d %H:%M')" \
+            --body "$(cat /tmp/report.txt)" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
